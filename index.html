@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chess Plus</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Variant Sandbox</p>
+          <h1>Chess Plus</h1>
+          <p class="subtitle">
+            Standard chess bones, chaotic modular rules. Checks are warnings,
+            not walls. You win by taking the enemy king.
+          </p>
+        </div>
+        <button id="restart-button" class="ghost-button" type="button">
+          New Game
+        </button>
+      </header>
+
+      <main class="layout">
+        <section class="board-panel">
+          <div class="status-bar">
+            <div>
+              <span class="status-label">Turn</span>
+              <strong id="turn-indicator">White</strong>
+            </div>
+            <div>
+              <span class="status-label">Rule Draft</span>
+              <strong id="draft-indicator">Black picks in 6 moves</strong>
+            </div>
+            <div>
+              <span class="status-label">Win Condition</span>
+              <strong>Capture the king</strong>
+            </div>
+          </div>
+
+          <div id="warning-banner" class="warning-banner"></div>
+          <div id="board" class="board" aria-label="Chess board"></div>
+          <div id="move-hints" class="move-hints"></div>
+        </section>
+
+        <aside class="sidebar">
+          <section class="card">
+            <h2>How It Works</h2>
+            <p>
+              New rule drafts arrive after a random 4 or 6 moves, but only at
+              the end of the scheduled player's own turn. The picker
+              alternates each time, starting with Black.
+            </p>
+            <p>
+              Kings can move into check or stay in check. The board will warn
+              you, but only a king capture ends the game.
+            </p>
+          </section>
+
+          <section class="card">
+            <h2>Active Rules</h2>
+            <div id="active-rules" class="rule-list empty-state">
+              No active rule effects yet.
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Captured Pieces</h2>
+            <div class="captured-grid">
+              <div>
+                <h3>White Lost</h3>
+                <div id="captured-white" class="captured-line"></div>
+              </div>
+              <div>
+                <h3>Black Lost</h3>
+                <div id="captured-black" class="captured-line"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <h2>Move Log</h2>
+            <ol id="move-log" class="move-log"></ol>
+          </section>
+        </aside>
+      </main>
+    </div>
+
+    <div id="draft-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-card">
+        <p class="eyebrow">Rule Draft</p>
+        <h2 id="draft-title">Black chooses a new rule</h2>
+        <p id="draft-copy" class="modal-copy"></p>
+        <div id="draft-options" class="draft-options"></div>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

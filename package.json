@@ -1,0 +1,9 @@
+{
+  "name": "chess-plus",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "python -m http.server 8000",
+    "test:logic": "node ./scripts/logic-smoke.js && node ./scripts/draft-timing-smoke.js && node ./scripts/rarity-smoke.js"
+  }
+}
