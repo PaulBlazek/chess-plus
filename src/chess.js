@@ -1,4 +1,4 @@
-const FILES = "abcdefgh";
+const FILES = "abcdefghijklmnopqrstuvwxyz";
 
 export const PIECE_SYMBOLS = {
   wp: "♙",
@@ -29,6 +29,24 @@ export function createInitialBoard() {
   return board;
 }
 
+export function createInitialLayout() {
+  return {
+    homeRow: { w: 7, b: 0 },
+    pawnRow: { w: 6, b: 1 },
+    kingCol: 4,
+    rookCols: { queen: 0, king: 7 },
+  };
+}
+
+export function cloneLayout(layout) {
+  return {
+    homeRow: { ...layout.homeRow },
+    pawnRow: { ...layout.pawnRow },
+    kingCol: layout.kingCol,
+    rookCols: { ...layout.rookCols },
+  };
+}
+
 export function makePiece(type, color) {
   return { type, color, hasMoved: false };
 }
@@ -37,12 +55,35 @@ export function cloneBoard(board) {
   return board.map((row) => row.map((piece) => (piece ? { ...piece } : null)));
 }
 
-export function inBounds(row, col) {
-  return row >= 0 && row < 8 && col >= 0 && col < 8;
+export function inBounds(row, col, boardOrSize = 8) {
+  const size = Array.isArray(boardOrSize) ? boardOrSize.length : boardOrSize;
+  return row >= 0 && row < size && col >= 0 && col < size;
 }
 
-export function algebraicFromCoords(row, col) {
-  return `${FILES[col]}${8 - row}`;
+function fileLabel(col) {
+  let value = col;
+  let label = "";
+  do {
+    label = FILES[value % 26] + label;
+    value = Math.floor(value / 26) - 1;
+  } while (value >= 0);
+  return label;
+}
+
+function shiftedFileLabel(col, offset) {
+  const shifted = col - offset;
+  if (shifted >= 0) {
+    return fileLabel(shifted);
+  }
+  return `-${fileLabel(Math.abs(shifted) - 1)}`;
+}
+
+export function algebraicFromCoords(row, col, board = 8, layout = null) {
+  const size = Array.isArray(board) ? board.length : board;
+  const expansionOffset =
+    layout?.kingCol != null ? layout.kingCol - 4 : Math.max(0, Math.floor((size - 8) / 2));
+  const topRank = 8 + expansionOffset;
+  return `${shiftedFileLabel(col, expansionOffset)}${topRank - row}`;
 }
 
 export function coordsFromKey(key) {
@@ -55,8 +96,8 @@ export function colorName(color) {
 }
 
 export function findKing(board, color) {
-  for (let row = 0; row < 8; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board[row].length; col += 1) {
       const piece = board[row][col];
       if (piece?.type === "k" && piece.color === color) {
         return { row, col };
@@ -67,7 +108,7 @@ export function findKing(board, color) {
 }
 
 function pushStepMove(board, moves, piece, fromRow, fromCol, toRow, toCol, extra = {}) {
-  if (!inBounds(toRow, toCol)) {
+  if (!inBounds(toRow, toCol, board)) {
     return;
   }
   const occupant = board[toRow][toCol];
@@ -96,7 +137,7 @@ function pushSlidingMoves(board, moves, piece, fromRow, fromCol, directions) {
   for (const [dRow, dCol] of directions) {
     let row = fromRow + dRow;
     let col = fromCol + dCol;
-    while (inBounds(row, col)) {
+    while (inBounds(row, col, board)) {
       const occupant = board[row][col];
       if (!occupant) {
         moves.push({
@@ -135,19 +176,20 @@ function baseMovesForPiece(state, row, col) {
   switch (piece.type) {
     case "p": {
       const oneAheadRow = row + direction;
-      if (inBounds(oneAheadRow, col) && !board[oneAheadRow][col]) {
+      const lastRow = board.length - 1;
+      if (inBounds(oneAheadRow, col, board) && !board[oneAheadRow][col]) {
         moves.push({
           from: { row, col },
           to: { row: oneAheadRow, col },
           piece,
           capture: null,
-          promotion: oneAheadRow === 0 || oneAheadRow === 7 ? "q" : null,
+          promotion: oneAheadRow === 0 || oneAheadRow === lastRow ? "q" : null,
         });
 
         const twoAheadRow = row + direction * 2;
         if (
           !piece.hasMoved &&
-          inBounds(twoAheadRow, col) &&
+          inBounds(twoAheadRow, col, board) &&
           !board[twoAheadRow][col]
         ) {
           moves.push({
@@ -161,7 +203,7 @@ function baseMovesForPiece(state, row, col) {
       }
 
       for (const targetCol of [col - 1, col + 1]) {
-        if (!inBounds(oneAheadRow, targetCol)) {
+        if (!inBounds(oneAheadRow, targetCol, board)) {
           continue;
         }
 
@@ -172,7 +214,7 @@ function baseMovesForPiece(state, row, col) {
             to: { row: oneAheadRow, col: targetCol },
             piece,
             capture: target,
-            promotion: oneAheadRow === 0 || oneAheadRow === 7 ? "q" : null,
+            promotion: oneAheadRow === 0 || oneAheadRow === lastRow ? "q" : null,
           });
         }
 
@@ -252,13 +294,23 @@ function baseMovesForPiece(state, row, col) {
       }
 
       if (!piece.hasMoved) {
-        const rank = piece.color === "w" ? 7 : 0;
+        const rank = state.layout.homeRow[piece.color];
+        const kingCol = state.layout.kingCol;
         const rookTargets = [
-          { rookCol: 7, path: [5, 6], kingTo: 6 },
-          { rookCol: 0, path: [1, 2, 3], kingTo: 2 },
+          {
+            rookCol: state.layout.rookCols.king,
+            path: [kingCol + 1, kingCol + 2],
+            kingTo: kingCol + 2,
+          },
+          {
+            rookCol: state.layout.rookCols.queen,
+            path: [kingCol - 1, kingCol - 2, kingCol - 3],
+            kingTo: kingCol - 2,
+          },
         ];
 
-        for (const candidate of rookTargets) {
+        if (row === rank && col === kingCol) {
+          for (const candidate of rookTargets) {
           const rook = board[rank][candidate.rookCol];
           const pathClear = candidate.path.every((pathCol) => !board[rank][pathCol]);
           if (rook?.type === "r" && rook.color === piece.color && !rook.hasMoved && pathClear) {
@@ -267,9 +319,11 @@ function baseMovesForPiece(state, row, col) {
               to: { row: rank, col: candidate.kingTo },
               piece,
               capture: null,
-              castle: candidate.rookCol === 7 ? "king" : "queen",
+              castle:
+                candidate.rookCol === state.layout.rookCols.king ? "king" : "queen",
             });
           }
+        }
         }
       }
       break;
@@ -313,8 +367,8 @@ export function collectMoves(state, row, col) {
 
 export function createMoveMap(state, color = state.turn) {
   const moveMap = new Map();
-  for (let row = 0; row < 8; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
+  for (let row = 0; row < state.board.length; row += 1) {
+    for (let col = 0; col < state.board[row].length; col += 1) {
       const piece = state.board[row][col];
       if (!piece || piece.color !== color) {
         continue;
@@ -339,6 +393,7 @@ export function simulateMove(state, move) {
     activeRules: state.activeRules,
     enPassantTarget: state.enPassantTarget ? { ...state.enPassantTarget } : null,
     pendingExtraTurns: { ...state.pendingExtraTurns },
+    layout: cloneLayout(state.layout),
   };
 
   applyMoveToState(clone, move, { simulation: true });
@@ -376,7 +431,7 @@ export function applyMoveToState(state, move, options = {}) {
   if (!options.simulation) {
     for (const rule of state.activeRules) {
       if (typeof rule.beforeMove === "function") {
-        rule.beforeMove({ state, rule, move, movingPiece });
+        rule.beforeMove({ state, rule, move, movingPiece, turnContext: options.turnContext });
       }
     }
   }
@@ -394,18 +449,22 @@ export function applyMoveToState(state, move, options = {}) {
   movingPiece.hasMoved = true;
 
   if (move.castle) {
-    const rank = movingPiece.color === "w" ? 7 : 0;
+    const rank = state.layout.homeRow[movingPiece.color];
     if (move.castle === "king") {
-      const rook = board[rank][7];
-      board[rank][7] = null;
-      board[rank][5] = rook;
+      const rookFrom = state.layout.rookCols.king;
+      const rookTo = state.layout.kingCol + 1;
+      const rook = board[rank][rookFrom];
+      board[rank][rookFrom] = null;
+      board[rank][rookTo] = rook;
       if (rook) {
         rook.hasMoved = true;
       }
     } else {
-      const rook = board[rank][0];
-      board[rank][0] = null;
-      board[rank][3] = rook;
+      const rookFrom = state.layout.rookCols.queen;
+      const rookTo = state.layout.kingCol - 1;
+      const rook = board[rank][rookFrom];
+      board[rank][rookFrom] = null;
+      board[rank][rookTo] = rook;
       if (rook) {
         rook.hasMoved = true;
       }
@@ -437,7 +496,14 @@ export function applyMoveToState(state, move, options = {}) {
   if (!options.simulation) {
     for (const rule of state.activeRules) {
       if (typeof rule.afterMove === "function") {
-        rule.afterMove({ state, rule, move, movingPiece, capturedPiece });
+        rule.afterMove({
+          state,
+          rule,
+          move,
+          movingPiece,
+          capturedPiece,
+          turnContext: options.turnContext,
+        });
       }
     }
   }
@@ -445,7 +511,14 @@ export function applyMoveToState(state, move, options = {}) {
   if (!options.simulation) {
     for (const rule of state.activeRules) {
       if (typeof rule.afterPly === "function") {
-        rule.afterPly({ state, rule, move, movingPiece, capturedPiece });
+        rule.afterPly({
+          state,
+          rule,
+          move,
+          movingPiece,
+          capturedPiece,
+          turnContext: options.turnContext,
+        });
       }
     }
 
@@ -478,8 +551,18 @@ export function moveSummary(move, stateBeforeMove) {
     return castleText;
   }
 
-  const from = algebraicFromCoords(move.from.row, move.from.col);
-  const to = algebraicFromCoords(move.to.row, move.to.col);
+  const from = algebraicFromCoords(
+    move.from.row,
+    move.from.col,
+    stateBeforeMove.board,
+    stateBeforeMove.layout,
+  );
+  const to = algebraicFromCoords(
+    move.to.row,
+    move.to.col,
+    stateBeforeMove.board,
+    stateBeforeMove.layout,
+  );
   const selfCheck = isKingThreatened(simulateMove(stateBeforeMove, move), move.piece.color);
   const warning = selfCheck ? " !" : "";
   return `${pieceLetter}${from}${captureMark}${to}${suffix}${warning}`;

@@ -1,3 +1,4 @@
+import { createInitialLayout } from "../src/chess.js";
 import { buildDraftChoices, RARITY_CONFIG, RULE_LIBRARY } from "../src/rules.js";
 
 if (RARITY_CONFIG.common.weight !== 2) {
@@ -33,6 +34,7 @@ const state = {
   nextRulePicker: "w",
   captured: { w: [], b: [] },
   board: Array.from({ length: 8 }, () => Array(8).fill(null)),
+  layout: createInitialLayout(),
 };
 
 const choices = buildDraftChoices(state, () => 0);

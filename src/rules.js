@@ -1,4 +1,4 @@
-import { algebraicFromCoords, colorName, findKing, inBounds } from "./chess.js";
+import { algebraicFromCoords, cloneLayout, colorName, findKing, inBounds } from "./chess.js";
 
 export const RARITY_CONFIG = {
   common: {
@@ -83,14 +83,14 @@ function addLongKingStep(board, moves, piece, row, col, dRow, dCol, pushStepMove
 }
 
 function nearestOpenStartingSquare(state, color, type) {
-  const homeRow = color === "w" ? 7 : 0;
-  const pawnRow = color === "w" ? 6 : 1;
+  const homeRow = state.layout.homeRow[color];
+  const pawnRow = state.layout.pawnRow[color];
   const preferredCols = {
-    q: [3],
-    r: [0, 7],
-    b: [2, 5],
-    n: [1, 6],
-    p: [0, 1, 2, 3, 4, 5, 6, 7],
+    q: [state.layout.kingCol - 1],
+    r: [state.layout.rookCols.queen, state.layout.rookCols.king],
+    b: [state.layout.kingCol - 2, state.layout.kingCol + 1],
+    n: [state.layout.kingCol - 3, state.layout.kingCol + 2],
+    p: Array.from({ length: state.board.length }, (_, index) => index),
   };
 
   const row = type === "p" ? pawnRow : homeRow;
@@ -100,8 +100,8 @@ function nearestOpenStartingSquare(state, color, type) {
     }
   }
 
-  for (let altRow = 0; altRow < 8; altRow += 1) {
-    for (let altCol = 0; altCol < 8; altCol += 1) {
+  for (let altRow = 0; altRow < state.board.length; altRow += 1) {
+    for (let altCol = 0; altCol < state.board[altRow].length; altCol += 1) {
       if (!state.board[altRow][altCol]) {
         return { row: altRow, col: altCol };
       }
@@ -113,14 +113,14 @@ function nearestOpenStartingSquare(state, color, type) {
 
 function furthestPawn(state, color) {
   let best = null;
-  for (let row = 0; row < 8; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
+  for (let row = 0; row < state.board.length; row += 1) {
+    for (let col = 0; col < state.board[row].length; col += 1) {
       const piece = state.board[row][col];
       if (!piece || piece.color !== color || piece.type !== "p") {
         continue;
       }
 
-      const progress = color === "w" ? 7 - row : row;
+      const progress = color === "w" ? state.board.length - 1 - row : row;
       if (!best || progress > best.progress) {
         best = { row, col, progress };
       }
@@ -131,6 +131,15 @@ function furthestPawn(state, color) {
 
 function pickRandomInt(min, max, randomFn = Math.random) {
   return min + Math.floor(randomFn() * (max - min + 1));
+}
+
+function shuffle(items, randomFn = Math.random) {
+  const copy = [...items];
+  for (let index = copy.length - 1; index > 0; index -= 1) {
+    const swapIndex = pickRandomInt(0, index, randomFn);
+    [copy[index], copy[swapIndex]] = [copy[swapIndex], copy[index]];
+  }
+  return copy;
 }
 
 export function rollDuration(duration, randomFn = Math.random) {
@@ -188,9 +197,40 @@ function createDraftOption(rule, randomFn = Math.random) {
   };
 }
 
+function expandBoardState(state) {
+  const oldBoard = state.board;
+  const nextSize = oldBoard.length + 2;
+  const expanded = Array.from({ length: nextSize }, () => Array(nextSize).fill(null));
+  for (let row = 0; row < oldBoard.length; row += 1) {
+    for (let col = 0; col < oldBoard[row].length; col += 1) {
+      expanded[row + 1][col + 1] = oldBoard[row][col];
+    }
+  }
+  state.board = expanded;
+  state.layout = cloneLayout(state.layout);
+  state.layout.homeRow.w += 1;
+  state.layout.homeRow.b += 1;
+  state.layout.pawnRow.w += 1;
+  state.layout.pawnRow.b += 1;
+  state.layout.kingCol += 1;
+  state.layout.rookCols = {
+    queen: state.layout.rookCols.queen + 1,
+    king: state.layout.rookCols.king + 1,
+  };
+  if (state.enPassantTarget) {
+    state.enPassantTarget = {
+      row: state.enPassantTarget.row + 1,
+      col: state.enPassantTarget.col + 1,
+    };
+  }
+}
+
 function describeDuration(rule) {
   if (typeof rule.remainingMoves === "number") {
     return `${rule.remainingMoves} ${rule.remainingMoves === 1 ? "move" : "moves"} left`;
+  }
+  if (rule.remainingTriggersByColor) {
+    return `White ${rule.remainingTriggersByColor.w} | Black ${rule.remainingTriggersByColor.b} bonus turns left`;
   }
   if (typeof rule.remainingTriggers === "number") {
     return `${rule.remainingTriggers} ${rule.remainingTriggers === 1 ? "trigger" : "triggers"} left`;
@@ -257,7 +297,7 @@ export const RULE_LIBRARY = [
           }
           const backward = piece.color === "w" ? 1 : -1;
           const backRow = row + backward;
-          if (inBounds(backRow, col) && !innerState.board[backRow][col]) {
+          if (inBounds(backRow, col, innerState.board) && !innerState.board[backRow][col]) {
             moves.push({
               from: { row, col },
               to: { row: backRow, col },
@@ -266,7 +306,7 @@ export const RULE_LIBRARY = [
             });
           }
           for (const targetCol of [col - 1, col + 1]) {
-            if (!inBounds(backRow, targetCol)) {
+            if (!inBounds(backRow, targetCol, innerState.board)) {
               continue;
             }
             const target = innerState.board[backRow][targetCol];
@@ -339,6 +379,18 @@ export const RULE_LIBRARY = [
     },
   },
   {
+    id: "board-expansion",
+    kind: "permanent",
+    rarity: "rare",
+    unique: false,
+    name: "Board Expansion",
+    description: "Add one empty tile to every edge of the board, expanding it outward in all four directions.",
+    apply(state, owner) {
+      expandBoardState(state);
+      return `${colorName(owner)} expanded the battlefield to ${state.board.length} by ${state.board.length}.`;
+    },
+  },
+  {
     id: "orthogonal-bishops",
     kind: "permanent",
     rarity: "common",
@@ -367,10 +419,10 @@ export const RULE_LIBRARY = [
   {
     id: "double-time",
     kind: "temporary",
-    rarity: "uncommon",
+    rarity: "rare",
     unique: true,
     name: "Double Time",
-    description: "The chooser gets an extra move after each of their next 2 turns.",
+    description: "Both players get an extra move after each of their next 2 normal turns. Bonus turns do not chain into more bonus turns.",
     apply(state, owner) {
       state.activeRules.push({
         id: this.id,
@@ -380,19 +432,23 @@ export const RULE_LIBRARY = [
         owner,
         name: this.name,
         description: this.description,
-        remainingTriggers: 2,
-        afterMove({ state: innerState, rule, movingPiece }) {
-          if (movingPiece.color !== owner || rule.remainingTriggers <= 0) {
+        remainingTriggersByColor: { w: 2, b: 2 },
+        afterMove({ state: innerState, rule, movingPiece, turnContext }) {
+          if (turnContext?.isBonusTurn) {
             return;
           }
-          innerState.pendingExtraTurns[owner] += 1;
-          rule.remainingTriggers -= 1;
+          const color = movingPiece.color;
+          if (rule.remainingTriggersByColor[color] <= 0) {
+            return;
+          }
+          innerState.pendingExtraTurns[color] += 1;
+          rule.remainingTriggersByColor[color] -= 1;
         },
         expired({ rule }) {
-          return rule.remainingTriggers <= 0;
+          return rule.remainingTriggersByColor.w <= 0 && rule.remainingTriggersByColor.b <= 0;
         },
       });
-      return `${colorName(owner)} will chain two extra turns over their next moves.`;
+      return `${colorName(owner)} accelerated both sides for their next 2 normal turns each.`;
     },
   },
   {
@@ -496,13 +552,13 @@ export const RULE_LIBRARY = [
       max: 7,
       parity: "both",
     },
-    description: "Each move must either be a capture or a pawn move.",
-    activeDescription: "Each move must either be a capture or a pawn move.",
+    description: "Each move must either be a capture, a pawn move, or a king move.",
+    activeDescription: "Each move must either be a capture, a pawn move, or a king move.",
     apply(state, owner) {
       const activeRule = createTimedRule(this, owner, {
         remainingMoves: this.offeredDuration,
         allowsMove({ move }) {
-          return Boolean(move.capture) || move.piece.type === "p";
+          return Boolean(move.capture) || move.piece.type === "p" || move.piece.type === "k";
         },
       });
       state.activeRules.push(activeRule);
@@ -519,20 +575,22 @@ export const RULE_LIBRARY = [
     apply(state, owner) {
       const direction = owner === "w" ? -1 : 1;
       let moved = 0;
-      const rows = owner === "w" ? [...Array(8).keys()] : [...Array(8).keys()].reverse();
+      const rows = owner === "w"
+        ? [...Array(state.board.length).keys()]
+        : [...Array(state.board.length).keys()].reverse();
 
       for (const row of rows) {
-        for (let col = 0; col < 8; col += 1) {
+        for (let col = 0; col < state.board[row].length; col += 1) {
           const piece = state.board[row][col];
           if (!piece || piece.color !== owner || piece.type !== "p") {
             continue;
           }
           const nextRow = row + direction;
-          if (inBounds(nextRow, col) && !state.board[nextRow][col]) {
+          if (inBounds(nextRow, col, state.board) && !state.board[nextRow][col]) {
             state.board[nextRow][col] = piece;
             state.board[row][col] = null;
             piece.hasMoved = true;
-            if (nextRow === 0 || nextRow === 7) {
+            if (nextRow === 0 || nextRow === state.board.length - 1) {
               piece.type = "q";
             }
             moved += 1;
@@ -543,6 +601,85 @@ export const RULE_LIBRARY = [
       return moved
         ? `${colorName(owner)} launched a pawnstorm and advanced ${moved} pawn${moved === 1 ? "" : "s"}.`
         : `${colorName(owner)} called a pawnstorm, but none of their pawns had room to move.`;
+    },
+  },
+  {
+    id: "reinforcements",
+    kind: "instant",
+    rarity: "rare",
+    unique: false,
+    name: "Reinforcements",
+    description: "Place new pawns for both sides on every empty square of Black's 2nd rank and White's 7th rank.",
+    apply(state, owner) {
+      const blackRank = state.layout.pawnRow.b;
+      const whiteRank = state.layout.pawnRow.w;
+      let placed = 0;
+
+      for (let col = 0; col < state.board[blackRank].length; col += 1) {
+        if (!state.board[blackRank][col]) {
+          state.board[blackRank][col] = { type: "p", color: "b", hasMoved: false };
+          placed += 1;
+        }
+      }
+
+      for (let col = 0; col < state.board[whiteRank].length; col += 1) {
+        if (!state.board[whiteRank][col]) {
+          state.board[whiteRank][col] = { type: "p", color: "w", hasMoved: false };
+          placed += 1;
+        }
+      }
+
+      return placed
+        ? `${colorName(owner)} called in reinforcements and deployed ${placed} new pawn${placed === 1 ? "" : "s"}.`
+        : `${colorName(owner)} called in reinforcements, but both reserve ranks were already full.`;
+    },
+  },
+  {
+    id: "open-the-graves",
+    kind: "instant",
+    rarity: "legendary",
+    unique: false,
+    name: "Open the Graves",
+    description: "All currently captured pieces return on random empty squares in the first two rows on their own side.",
+    canApply(state) {
+      return state.captured.w.length > 0 || state.captured.b.length > 0;
+    },
+    apply(state, owner) {
+      let revived = 0;
+
+      for (const color of ["w", "b"]) {
+        const targetRows = [state.layout.homeRow[color], state.layout.pawnRow[color]];
+        const openSquares = [];
+        for (const row of targetRows) {
+          for (let col = 0; col < state.board[row].length; col += 1) {
+            if (!state.board[row][col]) {
+              openSquares.push({ row, col });
+            }
+          }
+        }
+
+        const shuffledSquares = shuffle(openSquares);
+        const fallenPieces = [...state.captured[color]];
+        const revivalCount = Math.min(fallenPieces.length, shuffledSquares.length);
+
+        for (let index = 0; index < revivalCount; index += 1) {
+          const piece = fallenPieces[index];
+          const square = shuffledSquares[index];
+          state.board[square.row][square.col] = {
+            ...piece,
+            hasMoved: true,
+          };
+          const capturedIndex = state.captured[color].indexOf(piece);
+          if (capturedIndex >= 0) {
+            state.captured[color].splice(capturedIndex, 1);
+          }
+          revived += 1;
+        }
+      }
+
+      return revived
+        ? `${colorName(owner)} opened the graves and revived ${revived} fallen piece${revived === 1 ? "" : "s"}.`
+        : `${colorName(owner)} opened the graves, but there was no room for the dead to return.`;
     },
   },
   {
@@ -567,7 +704,12 @@ export const RULE_LIBRARY = [
       const index = state.captured[owner].lastIndexOf(revived);
       state.captured[owner].splice(index, 1);
       state.board[square.row][square.col] = { ...revived, hasMoved: true };
-      return `${colorName(owner)} recalled a ${revived.type.toUpperCase()} to ${algebraicFromCoords(square.row, square.col)}.`;
+      return `${colorName(owner)} recalled a ${revived.type.toUpperCase()} to ${algebraicFromCoords(
+        square.row,
+        square.col,
+        state.board,
+        state.layout,
+      )}.`;
     },
   },
   {
@@ -576,17 +718,27 @@ export const RULE_LIBRARY = [
     rarity: "legendary",
     unique: false,
     name: "Queen's Gift",
-    description: "Your most advanced pawn immediately promotes into a queen where it stands.",
-    canApply(state, owner) {
-      return Boolean(furthestPawn(state, owner));
+    description: "Each player promotes their most advanced pawn into a queen where it stands, if they have one.",
+    canApply(state) {
+      return Boolean(furthestPawn(state, "w") || furthestPawn(state, "b"));
     },
     apply(state, owner) {
-      const pawn = furthestPawn(state, owner);
-      if (!pawn) {
-        return `${colorName(owner)} had no pawn ready for a queen's gift.`;
+      const promotedColors = [];
+      for (const color of ["w", "b"]) {
+        const pawn = furthestPawn(state, color);
+        if (!pawn) {
+          continue;
+        }
+        state.board[pawn.row][pawn.col].type = "q";
+        promotedColors.push(colorName(color));
       }
-      state.board[pawn.row][pawn.col].type = "q";
-      return `${colorName(owner)} promoted a front-line pawn in place.`;
+      if (!promotedColors.length) {
+        return `${colorName(owner)} called for a queen's gift, but neither side had a pawn ready.`;
+      }
+      if (promotedColors.length === 2) {
+        return `${colorName(owner)} crowned a front-line pawn for both sides.`;
+      }
+      return `${colorName(owner)} crowned a front-line pawn for ${promotedColors[0]}.`;
     },
   },
   {
@@ -606,8 +758,8 @@ export const RULE_LIBRARY = [
       }
 
       let rookTarget = null;
-      for (let row = 0; row < 8; row += 1) {
-        for (let col = 0; col < 8; col += 1) {
+      for (let row = 0; row < state.board.length; row += 1) {
+        for (let col = 0; col < state.board[row].length; col += 1) {
           const piece = state.board[row][col];
           if (!piece || piece.color !== owner || piece.type !== "r") {
             continue;

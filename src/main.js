@@ -5,6 +5,7 @@ import {
   collectMoves,
   colorName,
   createInitialBoard,
+  createInitialLayout,
   isKingThreatened,
   moveSummary,
   simulateMove,
@@ -20,6 +21,7 @@ import { buildDraftChoices, getRarityDetails, getRuleStatusLine } from "./rules.
 const state = createGameState();
 
 const boardEl = document.querySelector("#board");
+const boardViewportEl = document.querySelector("#board-viewport");
 const turnIndicatorEl = document.querySelector("#turn-indicator");
 const draftIndicatorEl = document.querySelector("#draft-indicator");
 const warningBannerEl = document.querySelector("#warning-banner");
@@ -64,6 +66,7 @@ function createGameState() {
     ply: 0,
     movesSinceDraft: 0,
     ruleDraftInterval: INITIAL_RULE_DRAFT_INTERVAL,
+    layout: createInitialLayout(),
     nextRulePicker: "b",
     pendingDraft: null,
     enPassantTarget: null,
@@ -111,12 +114,18 @@ function annotateMoves(moves) {
 
 function makeMove(move) {
   const moverColor = move.piece.color;
+  const isBonusTurn = state.pendingExtraTurns[state.turn] > 0;
   const beforeMove = {
     ...state,
     board: state.board.map((row) => row.map((piece) => (piece ? { ...piece } : null))),
   };
 
-  applyMoveToState(state, move);
+  applyMoveToState(state, move, {
+    turnContext: {
+      isBonusTurn,
+      moverColor,
+    },
+  });
   state.ply += 1;
   state.movesSinceDraft += 1;
   state.moveLog.unshift({
@@ -128,8 +137,14 @@ function makeMove(move) {
   state.moveOptions = [];
 
   if (!state.winner) {
-    if (state.pendingExtraTurns[state.turn] > 0) {
+    if (isBonusTurn) {
       state.pendingExtraTurns[state.turn] -= 1;
+      if (state.pendingExtraTurns[state.turn] <= 0) {
+        state.pendingExtraTurns[state.turn] = 0;
+        state.turn = state.turn === "w" ? "b" : "w";
+      }
+    } else if (state.pendingExtraTurns[state.turn] > 0) {
+      // A normal turn can cash in one queued bonus move and keep the turn.
     } else {
       state.turn = state.turn === "w" ? "b" : "w";
     }
@@ -183,6 +198,8 @@ function resolveDraft(ruleId) {
 }
 
 function renderBoard() {
+  const tileSize = state.board.length <= 8 ? 0 : 64;
+  const boardPixelSize = tileSize ? state.board.length * tileSize : 0;
   const hints = new Map(
     state.moveOptions.map((move) => [
       `${move.to.row},${move.to.col}`,
@@ -191,9 +208,13 @@ function renderBoard() {
   );
 
   boardEl.innerHTML = "";
+  boardEl.style.gridTemplateColumns = `repeat(${state.board.length}, minmax(0, 1fr))`;
+  boardEl.style.minWidth = boardPixelSize ? `${boardPixelSize}px` : "";
+  boardEl.style.minHeight = boardPixelSize ? `${boardPixelSize}px` : "";
+  boardViewportEl.classList.toggle("is-scrollable", state.board.length > 8);
 
-  for (let row = 0; row < 8; row += 1) {
-    for (let col = 0; col < 8; col += 1) {
+  for (let row = 0; row < state.board.length; row += 1) {
+    for (let col = 0; col < state.board[row].length; col += 1) {
       const squareEl = document.createElement("button");
       squareEl.type = "button";
       squareEl.className = `square ${(row + col) % 2 === 0 ? "light" : "dark"}`;
@@ -223,7 +244,7 @@ function renderBoard() {
 
       const coordsEl = document.createElement("span");
       coordsEl.className = "coords";
-      coordsEl.textContent = algebraicFromCoords(row, col);
+      coordsEl.textContent = algebraicFromCoords(row, col, state.board, state.layout);
       squareEl.append(coordsEl);
       boardEl.append(squareEl);
     }
