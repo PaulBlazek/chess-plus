@@ -1,4 +1,5 @@
 const FILES = "abcdefghijklmnopqrstuvwxyz";
+let nextPieceId = 1;
 
 export const PIECE_SYMBOLS = {
   wp: "♙",
@@ -47,8 +48,8 @@ export function cloneLayout(layout) {
   };
 }
 
-export function makePiece(type, color) {
-  return { type, color, hasMoved: false };
+export function makePiece(type, color, extra = {}) {
+  return { id: nextPieceId++, type, color, hasMoved: false, ...extra };
 }
 
 export function cloneBoard(board) {
@@ -92,7 +93,22 @@ export function coordsFromKey(key) {
 }
 
 export function colorName(color) {
+  if (color === "draw") {
+    return "Draw";
+  }
   return color === "w" ? "White" : "Black";
+}
+
+export function findPieceById(board, pieceId) {
+  for (let row = 0; row < board.length; row += 1) {
+    for (let col = 0; col < board[row].length; col += 1) {
+      const piece = board[row][col];
+      if (piece?.id === pieceId) {
+        return { row, col, piece };
+      }
+    }
+  }
+  return null;
 }
 
 export function findKing(board, color) {
@@ -524,10 +540,17 @@ export function applyMoveToState(state, move, options = {}) {
 
     state.activeRules = state.activeRules.filter((rule) => {
       if (typeof rule.expired === "function") {
-        return !rule.expired({ state, rule });
+        const shouldExpire = rule.expired({ state, rule });
+        if (shouldExpire && typeof rule.onExpire === "function") {
+          rule.onExpire({ state, rule });
+        }
+        return !shouldExpire;
       }
       if (typeof rule.remainingMoves === "number") {
         rule.remainingMoves -= 1;
+        if (rule.remainingMoves <= 0 && typeof rule.onExpire === "function") {
+          rule.onExpire({ state, rule });
+        }
         return rule.remainingMoves > 0;
       }
       return true;
@@ -538,6 +561,31 @@ export function applyMoveToState(state, move, options = {}) {
     movingPiece,
     capturedPiece,
   };
+}
+
+export function capturePieceAt(state, row, col) {
+  if (!inBounds(row, col, state.board)) {
+    return null;
+  }
+  const piece = state.board[row][col];
+  if (!piece) {
+    return null;
+  }
+  state.board[row][col] = null;
+  state.captured[piece.color].push(piece);
+  return piece;
+}
+
+export function updateWinnerFromBoard(state) {
+  const whiteKing = findKing(state.board, "w");
+  const blackKing = findKing(state.board, "b");
+  if (!whiteKing && !blackKing) {
+    state.winner = "draw";
+  } else if (!whiteKing) {
+    state.winner = "b";
+  } else if (!blackKing) {
+    state.winner = "w";
+  }
 }
 
 export function moveSummary(move, stateBeforeMove) {

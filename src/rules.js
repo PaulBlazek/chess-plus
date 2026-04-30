@@ -1,4 +1,14 @@
-import { algebraicFromCoords, cloneLayout, colorName, findKing, inBounds } from "./chess.js";
+import {
+  algebraicFromCoords,
+  capturePieceAt,
+  cloneLayout,
+  colorName,
+  findKing,
+  findPieceById,
+  inBounds,
+  makePiece,
+  updateWinnerFromBoard,
+} from "./chess.js";
 
 export const RARITY_CONFIG = {
   common: {
@@ -73,7 +83,7 @@ function addLongKingStep(board, moves, piece, row, col, dRow, dCol, pushStepMove
   for (let step = 1; step < stepCount; step += 1) {
     const middleRow = row + rowStep * step;
     const middleCol = col + colStep * step;
-    if (!inBounds(middleRow, middleCol) || board[middleRow][middleCol]) {
+    if (!inBounds(middleRow, middleCol, board) || board[middleRow][middleCol]) {
       return moves;
     }
   }
@@ -195,6 +205,49 @@ function createDraftOption(rule, randomFn = Math.random) {
     offeredDuration: rolledDuration,
     description: formatDraftDescription(rule, rolledDuration),
   };
+}
+
+function hasAdvanceablePawn(state, color) {
+  const direction = color === "w" ? -1 : 1;
+  for (let row = 0; row < state.board.length; row += 1) {
+    for (let col = 0; col < state.board[row].length; col += 1) {
+      const piece = state.board[row][col];
+      if (!piece || piece.color !== color || piece.type !== "p") {
+        continue;
+      }
+      const nextRow = row + direction;
+      if (inBounds(nextRow, col, state.board) && !state.board[nextRow][col]) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasReserveOpenings(state) {
+  const reserveRows = [state.layout.pawnRow.b, state.layout.pawnRow.w];
+  return reserveRows.some((row) => state.board[row].some((piece) => !piece));
+}
+
+function hasGraveyardRoom(state, color) {
+  const targetRows = [state.layout.homeRow[color], state.layout.pawnRow[color]];
+  const emptySquares = targetRows.reduce(
+    (count, row) => count + state.board[row].filter((piece) => !piece).length,
+    0,
+  );
+  return state.captured[color].length > 0 && emptySquares > 0;
+}
+
+function hasNonKingPiece(state, color) {
+  for (let row = 0; row < state.board.length; row += 1) {
+    for (let col = 0; col < state.board[row].length; col += 1) {
+      const piece = state.board[row][col];
+      if (piece && piece.color === color && piece.type !== "k") {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function expandBoardState(state) {
@@ -417,6 +470,77 @@ export const RULE_LIBRARY = [
     },
   },
   {
+    id: "he-has-a-bomb",
+    kind: "temporary",
+    rarity: "common",
+    unique: false,
+    name: "He Has a Bomb",
+    duration: {
+      min: 4,
+      max: 8,
+      parity: "even",
+    },
+    description: "Choose one of your non-king pieces. When the timer ends, that piece and all adjacent pieces explode.",
+    activeDescription: "A chosen non-king piece will explode with all adjacent pieces when the timer ends.",
+    targeting: {
+      prompt: "Choose one of your non-king pieces to carry the bomb.",
+    },
+    canApply(state, owner) {
+      return hasNonKingPiece(state, owner);
+    },
+    canTarget({ piece, owner }) {
+      return Boolean(piece) && piece.color === owner && piece.type !== "k";
+    },
+    apply(state, owner, context = {}) {
+      const targetPiece = context.target?.piece;
+      if (!targetPiece) {
+        return `${colorName(owner)} could not arm a piece with the bomb.`;
+      }
+
+      targetPiece.bombCount = (targetPiece.bombCount ?? 0) + 1;
+      const activeRule = createTimedRule(this, owner, {
+        remainingMoves: this.offeredDuration,
+        targetPieceId: targetPiece.id,
+        onExpire({ state: innerState, rule }) {
+          const piecePosition = findPieceById(innerState.board, rule.targetPieceId);
+          if (!piecePosition) {
+            for (const color of ["w", "b"]) {
+              const capturedPiece = innerState.captured[color].find(
+                (piece) => piece.id === rule.targetPieceId,
+              );
+              if (capturedPiece?.bombCount) {
+                capturedPiece.bombCount = Math.max(0, capturedPiece.bombCount - 1);
+              }
+            }
+            return;
+          }
+
+          const affectedSquares = [];
+          for (let dRow = -1; dRow <= 1; dRow += 1) {
+            for (let dCol = -1; dCol <= 1; dCol += 1) {
+              const row = piecePosition.row + dRow;
+              const col = piecePosition.col + dCol;
+              if (inBounds(row, col, innerState.board) && innerState.board[row][col]) {
+                affectedSquares.push({ row, col });
+              }
+            }
+          }
+
+          if (piecePosition.piece.bombCount) {
+            piecePosition.piece.bombCount = Math.max(0, piecePosition.piece.bombCount - 1);
+          }
+
+          for (const square of affectedSquares) {
+            capturePieceAt(innerState, square.row, square.col);
+          }
+          updateWinnerFromBoard(innerState);
+        },
+      });
+      state.activeRules.push(activeRule);
+      return `${colorName(owner)} planted a bomb set to blow in ${activeRule.remainingMoves} moves.`;
+    },
+  },
+  {
     id: "double-time",
     kind: "temporary",
     rarity: "rare",
@@ -572,6 +696,9 @@ export const RULE_LIBRARY = [
     unique: false,
     name: "Pawnstorm",
     description: "Every pawn you own tries to advance one square immediately if the square is empty.",
+    canApply(state, owner) {
+      return hasAdvanceablePawn(state, owner);
+    },
     apply(state, owner) {
       const direction = owner === "w" ? -1 : 1;
       let moved = 0;
@@ -610,6 +737,9 @@ export const RULE_LIBRARY = [
     unique: false,
     name: "Reinforcements",
     description: "Place new pawns for both sides on every empty square of Black's 2nd rank and White's 7th rank.",
+    canApply(state) {
+      return hasReserveOpenings(state);
+    },
     apply(state, owner) {
       const blackRank = state.layout.pawnRow.b;
       const whiteRank = state.layout.pawnRow.w;
@@ -617,14 +747,14 @@ export const RULE_LIBRARY = [
 
       for (let col = 0; col < state.board[blackRank].length; col += 1) {
         if (!state.board[blackRank][col]) {
-          state.board[blackRank][col] = { type: "p", color: "b", hasMoved: false };
+          state.board[blackRank][col] = makePiece("p", "b");
           placed += 1;
         }
       }
 
       for (let col = 0; col < state.board[whiteRank].length; col += 1) {
         if (!state.board[whiteRank][col]) {
-          state.board[whiteRank][col] = { type: "p", color: "w", hasMoved: false };
+          state.board[whiteRank][col] = makePiece("p", "w");
           placed += 1;
         }
       }
@@ -642,7 +772,7 @@ export const RULE_LIBRARY = [
     name: "Open the Graves",
     description: "All currently captured pieces return on random empty squares in the first two rows on their own side.",
     canApply(state) {
-      return state.captured.w.length > 0 || state.captured.b.length > 0;
+      return hasGraveyardRoom(state, "w") || hasGraveyardRoom(state, "b");
     },
     apply(state, owner) {
       let revived = 0;
@@ -690,7 +820,14 @@ export const RULE_LIBRARY = [
     name: "Recall",
     description: "Return your most recently captured non-king piece to the nearest open starting square.",
     canApply(state, owner) {
-      return [...state.captured[owner]].reverse().some((piece) => piece.type !== "k");
+      return (
+        [...state.captured[owner]].reverse().some((piece) => piece.type !== "k") &&
+        Boolean(
+          [...state.captured[owner]]
+            .reverse()
+            .find((piece) => piece.type !== "k" && nearestOpenStartingSquare(state, owner, piece.type)),
+        )
+      );
     },
     apply(state, owner) {
       const revived = [...state.captured[owner]].reverse().find((piece) => piece.type !== "k");
@@ -749,7 +886,18 @@ export const RULE_LIBRARY = [
     name: "Royal Relocation",
     description: "Swap your king with your nearest rook.",
     canApply(state, owner) {
-      return Boolean(findKing(state.board, owner));
+      if (!findKing(state.board, owner)) {
+        return false;
+      }
+      for (let row = 0; row < state.board.length; row += 1) {
+        for (let col = 0; col < state.board[row].length; col += 1) {
+          const piece = state.board[row][col];
+          if (piece?.color === owner && piece.type === "r") {
+            return true;
+          }
+        }
+      }
+      return false;
     },
     apply(state, owner) {
       const king = findKing(state.board, owner);

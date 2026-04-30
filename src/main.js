@@ -49,6 +49,10 @@ boardEl.addEventListener("click", (event) => {
 
   const row = Number(square.dataset.row);
   const col = Number(square.dataset.col);
+  if (state.pendingRuleTarget) {
+    handleRuleTargetClick(row, col);
+    return;
+  }
   handleSquareClick(row, col);
 });
 
@@ -69,9 +73,31 @@ function createGameState() {
     layout: createInitialLayout(),
     nextRulePicker: "b",
     pendingDraft: null,
+    pendingRuleTarget: null,
     enPassantTarget: null,
     lastCaptured: null,
   };
+}
+
+function handleRuleTargetClick(row, col) {
+  const pending = state.pendingRuleTarget;
+  if (!pending) {
+    return;
+  }
+  const piece = state.board[row][col];
+  if (!pending.rule.canTarget?.({ state, owner: pending.picker, piece, row, col })) {
+    render();
+    return;
+  }
+
+  const note = pending.rule.apply(state, pending.picker, {
+    target: {
+      row,
+      col,
+      piece,
+    },
+  });
+  finalizeRuleResolution(pending.rule, note, pending.picker);
 }
 
 function handleSquareClick(row, col) {
@@ -183,15 +209,33 @@ function resolveDraft(ruleId) {
     return;
   }
 
+  state.pendingDraft = null;
+  state.selection = null;
+  state.moveOptions = [];
+
+  if (rule.targeting) {
+    state.pendingRuleTarget = {
+      picker: draft.picker,
+      rule,
+    };
+    render();
+    return;
+  }
+
   const note = rule.apply(state, draft.picker);
+  finalizeRuleResolution(rule, note, draft.picker);
+}
+
+function finalizeRuleResolution(rule, note, picker) {
   state.moveLog.unshift({
     index: `R${state.ply}`,
     text: `Rule: ${rule.name} - ${note}`,
   });
   state.movesSinceDraft = 0;
   state.ruleDraftInterval = rollDraftInterval();
-  state.nextRulePicker = draft.picker === "w" ? "b" : "w";
+  state.nextRulePicker = picker === "w" ? "b" : "w";
   state.pendingDraft = null;
+  state.pendingRuleTarget = null;
   state.selection = null;
   state.moveOptions = [];
   render();
@@ -240,6 +284,12 @@ function renderBoard() {
       const piece = state.board[row][col];
       if (piece) {
         squareEl.textContent = PIECE_SYMBOLS[`${piece.color}${piece.type}`];
+        if (piece.bombCount) {
+          const badgeEl = document.createElement("span");
+          badgeEl.className = "piece-badge";
+          badgeEl.textContent = "💣";
+          squareEl.append(badgeEl);
+        }
       }
 
       const coordsEl = document.createElement("span");
@@ -252,9 +302,13 @@ function renderBoard() {
 }
 
 function renderStatus() {
-  turnIndicatorEl.textContent = state.winner
-    ? `${colorName(state.winner)} wins`
-    : colorName(state.turn);
+  if (state.winner === "draw") {
+    turnIndicatorEl.textContent = "Draw";
+  } else {
+    turnIndicatorEl.textContent = state.winner
+      ? `${colorName(state.winner)} wins`
+      : colorName(state.turn);
+  }
 
   draftIndicatorEl.textContent = getDraftIndicatorText(state);
 
@@ -266,7 +320,11 @@ function renderStatus() {
     warnings.push("Black king is exposed.");
   }
   if (state.winner) {
-    warnings.unshift(`${colorName(state.winner)} captured the king and wins.`);
+    warnings.unshift(
+      state.winner === "draw"
+        ? "Both kings were destroyed. The game is a draw."
+        : `${colorName(state.winner)} captured the king and wins.`,
+    );
   }
   warningBannerEl.textContent = warnings.join(" ");
 
@@ -284,8 +342,9 @@ function renderStatus() {
       ? parts.join(" | ")
       : "Choose any highlighted destination.";
   } else {
-    moveHintsEl.textContent =
-      "Select a piece to see pseudo-legal moves. Check is advisory only.";
+    moveHintsEl.textContent = state.pendingRuleTarget
+      ? state.pendingRuleTarget.rule.targeting.prompt
+      : "Select a piece to see pseudo-legal moves. Check is advisory only.";
   }
 }
 

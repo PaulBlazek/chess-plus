@@ -250,6 +250,44 @@ if (
   throw new Error("Open the Graves should revive captured pieces onto empty home-side rows.");
 }
 
+const bombState = {
+  board: createInitialBoard(),
+  turn: "w",
+  winner: null,
+  activeRules: [],
+  captured: { w: [], b: [] },
+  pendingExtraTurns: { w: 0, b: 0 },
+  moveLog: [],
+  ply: 0,
+  movesSinceDraft: 0,
+  ruleDraftInterval: 4,
+  layout: createInitialLayout(),
+  nextRulePicker: "b",
+  pendingDraft: null,
+  pendingRuleTarget: null,
+  enPassantTarget: null,
+  lastCaptured: null,
+};
+const bombRule = RULE_LIBRARY.find((rule) => rule.id === "he-has-a-bomb");
+bombRule.offeredDuration = 4;
+const bombCarrier = bombState.board[7][1];
+bombRule.apply(bombState, "w", {
+  target: {
+    row: 7,
+    col: 1,
+    piece: bombCarrier,
+  },
+});
+const activeBombRule = bombState.activeRules.find((rule) => rule.id === "he-has-a-bomb");
+if (!activeBombRule || !bombCarrier.bombCount) {
+  throw new Error("He Has a Bomb should mark the chosen piece and create an active timed rule.");
+}
+bombState.board[6][0] = { ...bombState.board[6][0], type: "q" };
+activeBombRule.onExpire({ state: bombState, rule: activeBombRule });
+if (bombState.board[7][1] || bombState.board[6][0]) {
+  throw new Error("He Has a Bomb should explode the carrier and adjacent pieces on expiry.");
+}
+
 if (isKingThreatened(state, "w")) {
   throw new Error("White king should not be threatened in the smoke test line.");
 }

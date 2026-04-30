@@ -71,4 +71,19 @@ if (activeVersion.remainingMoves !== timedOffer.offeredDuration) {
   throw new Error("Timed rules should keep the duration shown in the draft offer.");
 }
 
+const filteredState = {
+  activeRules: [],
+  nextRulePicker: "w",
+  captured: { w: [], b: [] },
+  board: Array.from({ length: 8 }, () => Array(8).fill(null)),
+  layout: createInitialLayout(),
+};
+filteredState.board[7][4] = { type: "k", color: "w", hasMoved: false };
+filteredState.board[0][4] = { type: "k", color: "b", hasMoved: false };
+const filteredChoices = buildDraftChoices(filteredState, () => 0);
+const filteredIds = new Set(filteredChoices.map((rule) => rule.id));
+if (filteredIds.has("pawnstorm") || filteredIds.has("recall") || filteredIds.has("reinforcements")) {
+  throw new Error("Rules that would do nothing should be filtered out of the draft.");
+}
+
 console.log("rarity smoke test passed");
